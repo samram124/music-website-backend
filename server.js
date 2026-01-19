@@ -33,23 +33,12 @@ const pool = new Pool({
 // ======================
 // File Upload Setup
 // ======================
-const uploadDir = "uploads";
-
-if (!fs.existsSync(uploadDir)) {
-  fs.mkdirSync(uploadDir);
-}
-
-const storage = multer.diskStorage({
-  destination: uploadDir,
-  filename: (req, file, cb) => {
-    cb(null, Date.now() + "-" + file.originalname);
-  }
+// ======================
+// File Upload (Memory)
+// ======================
+const upload = multer({
+  storage: multer.memoryStorage()
 });
-
-const upload = multer({ storage });
-
-// Serve uploaded files
-app.use("/uploads", express.static(uploadDir));
 
 // ======================
 // Health Check
@@ -117,15 +106,19 @@ app.post("/songs/upload", upload.single("song"), async (req, res) => {
     return res.status(400).json({ error: "Missing song or title" });
   }
 
-  const fileUrl = `/uploads/${req.file.filename}`;
+  // Temporary placeholder (next step = real storage)
+  const fileUrl = "TEMP_STORAGE";
 
   await pool.query(
     "INSERT INTO songs (title, artist, file_url) VALUES ($1, $2, $3)",
     [title, artist, fileUrl]
   );
 
-  res.json({ message: "Song uploaded" });
+  res.json({
+    message: "Song received successfully (storage coming next)"
+  });
 });
+
 
 // ======================
 // GET ALL SONGS
