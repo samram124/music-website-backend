@@ -1,135 +1,93 @@
-// ===============================
-// FILE: server.js
-// ===============================
-
 import express from "express";
 import cors from "cors";
 import dotenv from "dotenv";
+import pkg from "pg";
 import bcrypt from "bcrypt";
 import jwt from "jsonwebtoken";
-import pkg from "pg";
-
-const { Pool } = pkg;
 
 dotenv.config();
 
+const { Pool } = pkg;
 const app = express();
+
+const PORT = process.env.PORT || 10000;
+const JWT_SECRET = process.env.JWT_SECRET;
+
+// Middleware
 app.use(cors());
 app.use(express.json());
 
-// ===============================
-// DATABASE
-// ===============================
+// Database
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
-  ssl: process.env.NODE_ENV === "production" ? { rejectUnauthorized: false } : false,
+  ssl: { rejectUnauthorized: false }
 });
 
-// ===============================
-// AUTH MIDDLEWARE
-// ===============================
-function auth(req, res, next) {
-  const token = req.headers.authorization?.split(" ")[1];
-  if (!token) return res.status(401).json({ error: "No token" });
-
-  try {
-    req.user = jwt.verify(token, process.env.JWT_SECRET);
-    next();
-  } catch {
-    res.status(401).json({ error: "Invalid token" });
-  }
-}
-
-// ===============================
-// AUTH ROUTES
-// ===============================
-app.post("/auth/register", async (req, res) => {
-  const { email, password } = req.body;
-  const hash = await bcrypt.hash(password, 10);
-
-  try {
-    await pool.query(
-      "INSERT INTO users (email, password_hash) VALUES ($1,$2)",
-      [email, hash]
-    );
-    res.json({ success: true });
-  } catch (err) {
-    res.status(400).json({ error: "User exists" });
-  }
-});
-
-app.post("/auth/login", async (req, res) => {
-  const { email, password } = req.body;
-  const result = await pool.query("SELECT * FROM users WHERE email=$1", [email]);
-  if (!result.rows.length) return res.status(401).json({ error: "Invalid" });
-
-  const user = result.rows[0];
-  const match = await bcrypt.compare(password, user.password_hash);
-  if (!match) return res.status(401).json({ error: "Invalid" });
-
-  const token = jwt.sign({ id: user.id }, process.env.JWT_SECRET);
-  res.json({ token });
-});
-
-// ===============================
-// SONG LIBRARY (GLOBAL)
-// ===============================
-app.get("/songs", async (req, res) => {
-  const result = await pool.query("SELECT * FROM songs ORDER BY created_at DESC");
-  res.json(result.rows);
-});
-
-app.post("/songs", auth, async (req, res) => {
-  const { title, artist, album, mp3_url, cover_url } = req.body;
-
-  await pool.query(
-    `INSERT INTO songs (title, artist, album, mp3_url, cover_url, uploaded_by)
-     VALUES ($1,$2,$3,$4,$5,$6)` ,
-    [title, artist, album, mp3_url, cover_url, req.user.id]
-  );
-
-  res.json({ success: true });
-});
-
-// ===============================
-// PLAYLISTS (PRIVATE)
-// ===============================
-app.get("/playlists", auth, async (req, res) => {
-  const result = await pool.query("SELECT * FROM playlists WHERE user_id=$1", [req.user.id]);
-  res.json(result.rows);
-});
-
-app.post("/playlists", auth, async (req, res) => {
-  await pool.query(
-    "INSERT INTO playlists (user_id, name) VALUES ($1,$2)",
-    [req.user.id, req.body.name]
-  );
-  res.json({ success: true });
-});
-
-app.post("/playlists/:id/songs", auth, async (req, res) => {
-  await pool.query(
-    "INSERT INTO playlist_songs (playlist_id, song_id) VALUES ($1,$2)",
-    [req.params.id, req.body.song_id]
-  );
-  res.json({ success: true });
-});
-
-app.delete("/playlists/:id/songs/:songId", auth, async (req, res) => {
-  await pool.query(
-    "DELETE FROM playlist_songs WHERE playlist_id=$1 AND song_id=$2",
-    [req.params.id, req.params.songId]
-  );
-  res.json({ success: true });
-});
-
-// ===============================
-// SERVER
-// ===============================
-const PORT = process.env.PORT || 3000;
-// Health check
+// ======================
+// Health Check
+// ======================
 app.get("/health", (req, res) => {
   res.status(200).send("OK");
 });
 
-app.listen(PORT, () => console.log(`Server running on ${PORT}`));
+// ======================
+// AUTH ROUTES
+// ======================
+
+// Register
+app.post("/auth/register", async (req, res) => {
+  const { username, password } = req.body;
+
+  if (!username || !password) {
+    return res.status(400).json({ error: "Missing username or password" });
+  }
+
+  try {
+    const passwordHash = await bcrypt.hash(password, 10);
+
+    await pool.query(
+      "INSERT INTO users (username, password_hash) VALUES ($1, $2)",
+      [username, passwordHash]
+    );
+
+    res.json({ message: "User registered successfully" });
+  } catch (err) {
+    res.status(400).json({ error: "Username already exists" });
+  }
+});
+
+// Login
+app.post("/auth/login", async (req, res) => {
+  const { username, password } = req.body;
+
+  const result = await pool.query(
+    "SELECT * FROM users WHERE username = $1",
+    [username]
+  );
+
+  if (result.rows.length === 0) {
+    return res.status(401).json({ error: "Invalid credentials" });
+  }
+
+  const user = result.rows[0];
+  const validPassword = await bcrypt.compare(password, user.password_hash);
+
+  if (!validPassword) {
+    return res.status(401).json({ error: "Invalid credentials" });
+  }
+
+  const token = jwt.sign(
+    { userId: user.id, username: user.username },
+    JWT_SECRET,
+    { expiresIn: "7d" }
+  );
+
+  res.json({ token });
+});
+
+// ======================
+// Server Start
+// ======================
+app.listen(PORT, () => {
+  console.log(`Server running on ${PORT}`);
+});
