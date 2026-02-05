@@ -1,10 +1,10 @@
 import express from "express";
 import cors from "cors";
 import multer from "multer";
-import path from "path";
-import fs from "fs";
 import pg from "pg";
 import bcrypt from "bcrypt";
+import { v2 as cloudinary } from "cloudinary";
+import { CloudinaryStorage } from "multer-storage-cloudinary";
 
 const app = express();
 const PORT = process.env.PORT || 10000;
@@ -24,32 +24,36 @@ const pool = new pg.Pool({
 });
 
 // =======================
-// File storage setup
+// Cloudinary Config
 // =======================
-const uploadDir = "uploads";
-const coverDir = "covers";
+cloudinary.config({
+  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+  api_key: process.env.CLOUDINARY_API_KEY,
+  api_secret: process.env.CLOUDINARY_API_SECRET,
+});
 
-if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir);
-if (!fs.existsSync(coverDir)) fs.mkdirSync(coverDir);
-
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    if (file.fieldname === "cover") cb(null, coverDir);
-    else cb(null, uploadDir);
-  },
-  filename: (req, file, cb) => {
-    const unique = Date.now() + "-" + Math.round(Math.random() * 1e9);
-    cb(null, unique + path.extname(file.originalname));
+// =======================
+// Cloud Storage Setup
+// =======================
+const storage = new CloudinaryStorage({
+  cloudinary,
+  params: async (req, file) => {
+    if (file.fieldname === "song") {
+      return {
+        folder: "songs",
+        resource_type: "video", // Cloudinary treats audio as video
+      };
+    }
+    if (file.fieldname === "cover") {
+      return {
+        folder: "covers",
+        resource_type: "image",
+      };
+    }
   },
 });
 
 const upload = multer({ storage });
-
-// =======================
-// Static file hosting
-// =======================
-app.use("/uploads", express.static(uploadDir));
-app.use("/covers", express.static(coverDir));
 
 // =======================
 // Health check
@@ -99,15 +103,16 @@ app.post(
       if (!songFile || !title)
         return res.status(400).json({ error: "Song and title required" });
 
-      const songUrl = `/uploads/${songFile.filename}`;
-      const coverUrl = coverFile ? `/covers/${coverFile.filename}` : null;
+      // These are now FULL Cloudinary URLs
+      const songUrl = songFile.path;
+      const coverUrl = coverFile ? coverFile.path : null;
 
       await pool.query(
         "INSERT INTO songs (title, artist, file_url, cover_url) VALUES ($1, $2, $3, $4)",
         [title, artist, songUrl, coverUrl]
       );
 
-      res.json({ message: "Song uploaded" });
+      res.json({ message: "Song uploaded", songUrl, coverUrl });
     } catch (err) {
       console.error(err);
       res.status(500).json({ error: "Upload failed" });
@@ -117,7 +122,9 @@ app.post(
 
 // Get all songs
 app.get("/songs", async (req, res) => {
-  const result = await pool.query("SELECT * FROM songs ORDER BY uploaded_at DESC");
+  const result = await pool.query(
+    "SELECT * FROM songs ORDER BY uploaded_at DESC"
+  );
   res.json(result.rows);
 });
 
